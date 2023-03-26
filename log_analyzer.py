@@ -191,9 +191,8 @@ def main(conf: dict):
 		logging.exception('Unexpected exception!')
 		raise
 
-	logging.info(f'End work.')
+	logging.info('End work.')
 
 
 if __name__ == "__main__":
 	main(config)
-
