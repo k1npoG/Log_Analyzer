@@ -31,7 +31,6 @@ def get_log_file(conf: dict) -> [namedtuple, None]:
 				oldest_log_file_name = oldest_log_file_name if oldest_log_file_name > filename[20:28] else filename
 	except FileNotFoundError:
 		logging.info(f'Not found log directory path: "{conf.get("LOG_DIR")}".')
-		return
 	except BaseException:
 		logging.exception('When try to open file...')
 		raise
@@ -47,6 +46,17 @@ def get_log_file(conf: dict) -> [namedtuple, None]:
 	)
 
 
+def get_report_path(log_info: namedtuple, conf: dict):
+
+	report_path = f'{conf["REPORT_DIR"]}/report-{datetime.strftime(log_info.datetime, "%Y.%m.%d")}.html'
+	# If file exist, return True:
+	if os.path.isfile(report_path):
+		logging.info(f'Report file exist. Report file path: "{report_path}".')
+		return
+
+	return report_path
+
+
 def read_log(file_info: namedtuple):
 	""" Function for read log """
 
@@ -60,26 +70,25 @@ def read_log(file_info: namedtuple):
 def analyze_log(log_info: namedtuple, conf: dict) -> [list, None]:
 	""" Function for analyze log and evaluate metrics """
 
+	logging.info(f'Find new log file for parse! Log file path: "{log_info.path}".')
+
 	# regular for "$request" and $request_time
-	request_and__time = re.compile(r'"\w+ ([\/\w?=&-.%:]+) [\w\/.]+"|(\d+.\d+$)')
+	request_and__time = re.compile(r'] "\w+ ([\/\w?=&-.%:]+) [\w\/.]+"|(\d+.\d+$)')
 
 	table = defaultdict(list)
 	count_erros = 0
 	count_total = 0
 	request_time_total = 0
 	for record in read_log(log_info):
-		try:
-			count_total += 1
-			parsed = request_and__time.findall(record)
-			# Create url and requst time variable to check correct parsing:
+		count_total += 1
+		parsed = request_and__time.findall(record)
+		# Create url and request time variable to check correct parsing:
+		if len(parsed) == 2:
 			url, request_time = parsed[0][0], float(parsed[1][1])
 			table[url].append(request_time)
 			request_time_total += request_time
-		except BaseException:
+		else:
 			count_erros += 1
-
-		# if count_total > 10:
-		# 	break
 
 	if count_erros / count_total > conf.get('ERROR_THRESHOLD', 0.5):
 		logging.error(f'Percent of parse failures more than: {conf.get("ERROR_THRESHOLD", 0.5) * 100}%!')
@@ -103,40 +112,28 @@ def analyze_log(log_info: namedtuple, conf: dict) -> [list, None]:
 	return json_table if conf['REPORT_SIZE'] > len(json_table) else json_table[:conf['REPORT_SIZE']]
 
 
-def create_report(conf: dict):
+def create_report(table_json: list, report_path: str, conf):
 	""" Function for create report with template report.html """
 
-	log_info = get_log_file(conf)
-	if log_info is None:
-		return
+	logging.info(f'Log file analyzing complete.')
+	# Get report template from report.html:
+	with open('report.html', encoding='utf-8') as filename:
+		report = Template(filename.read()).safe_substitute(table_json=table_json)
 
-	report_path = f'{conf["REPORT_DIR"]}/report-{datetime.strftime(log_info.datetime, "%Y.%m.%d")}.html'
-	# If file exist, return True:
-	if os.path.isfile(report_path):
-		logging.info(f'Report file exist. Report file path: "{report_path}".')
-		return
+	# Create file path if needed:
+	try:
+		os.makedirs(conf["REPORT_DIR"])
+		logging.info(f'Create report directory path: "{conf["REPORT_DIR"]}".')
+	except FileExistsError:
+		pass
 
-	logging.info(f'Find new log file for parse! Log file path: "{log_info.path}".')
+	# Create report file:
+	with open(report_path, 'w', encoding='utf-8') as filename:
+		filename.write(report)
 
-	table_json = analyze_log(log_info, conf)  # table json for template
-	if table_json:
-		logging.info(f'Log file analyzing complete.')
-		# Get report template from report.html:
-		with open('report.html', encoding='utf-8') as filename:
-			report = Template(filename.read()).safe_substitute(table_json=table_json)
+	logging.info(f'New report ready! Report file path: "{report_path}".')
 
-		# Create file path if needed:
-		try:
-			os.makedirs(conf["REPORT_DIR"])
-			logging.info(f'Create report directory path: "{conf["REPORT_DIR"]}".')
-		except FileExistsError:
-			pass
-
-		# Create report file:
-		with open(report_path, 'w', encoding='utf-8') as filename:
-			filename.write(report)
-
-		logging.info(f'New report ready! Report file path: "{report_path}".')
+	return report
 
 
 def init_work(conf: dict) -> dict:
@@ -181,11 +178,14 @@ def main(conf: dict):
 		raise
 
 	try:
-		create_report(conf)
+		file_info = get_log_file(conf)
+		if file_info:
+			report_path = get_report_path(file_info, conf)
+			if report_path:
+				table_json = analyze_log(file_info, conf)  # table json for template
+				create_report(table_json, report_path, conf)
 	except KeyboardInterrupt:
 		logging.exception('Keyboard interrupt!')
-		raise
-	except FileNotFoundError:
 		raise
 	except BaseException:
 		logging.exception('Unexpected exception!')
